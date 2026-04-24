@@ -847,32 +847,31 @@ function _apiBody(extra) {
 }
 
 // SSE 스트림 읽기 공통 함수
-async function readSSEStream(resp, onData, onError) {
+async function readSSEStream(resp, { onText, onTool, onSlot, onError, onRaw } = {}) {
   const reader = resp.body.getReader(), dec = new TextDecoder();
   let buf = '';
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
-    // SSE 이벤트는 \n\n으로 구분
     const events = buf.split('\n\n');
     buf = events.pop() || '';
     for (const event of events) {
       const trimmed = event.trim();
-      if (!trimmed) continue;
-      // 여러 줄일 수 있으므로 첫 번째 data: 이후 전체를 텍스트로
-      if (trimmed.startsWith('data: ')) {
-        const d = trimmed.slice(6);
-        if (d === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(d);
-          if (parsed.error) { onError(parsed.error); continue; }
-          if (parsed.slotId) { onData(parsed, true); continue; } // 병렬 결과
-          onData(d, false);
-        } catch {
-          // JSON이 아니면 텍스트 그대로
-          onData(d, false);
-        }
+      if (!trimmed || !trimmed.startsWith('data: ')) continue;
+      const d = trimmed.slice(6);
+      if (d === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(d);
+        if (parsed.error)  { onError?.(parsed.error); continue; }
+        if (parsed.slotId) { onSlot?.(parsed); continue; }
+        if (parsed.tool)   { onTool?.(parsed); continue; }
+        if (parsed.text)   { onText?.(parsed.text); continue; }
+        // JSON이지만 알 수 없는 형식
+        onRaw?.(d);
+      } catch {
+        // JSON이 아니면 텍스트 그대로
+        onRaw?.(d);
       }
     }
   }
@@ -949,13 +948,7 @@ async function runSimpleChat(prompt) {
         try {
           const p = JSON.parse(d);
           if (p.tool) {
-            // 도구 실행 이벤트
-            if (p.status === 'running') {
-              msg.content += `\n[도구 실행: ${p.tool}]`;
-            } else if (p.status === 'done') {
-              msg.content += ` 완료`;
-            }
-            renderMessages();
+            // 도구 실행 이벤트 — 채팅에 표시하지 않음 (로그만)
             continue;
           }
           if (p.error) {
@@ -1038,16 +1031,14 @@ async function runAgentWorkflow(prompt) {
           const p = JSON.parse(d);
           if (p.error) { msg.content += `\n[오류: ${p.error}]`; }
           else if (p.tool && p.status === 'running') {
-            // 도구 실행 시작
+            // 도구 실행 시작 — 채팅에 표시하지 않음
             toolCount++;
             wf.steps[1].status = 'running';
-            wf.steps[1].detail = `${p.tool} 실행 중... (${toolCount}번째)`;
-            msg.content += `\n[도구: ${p.tool}] `;
+            wf.steps[1].detail = `도구 실행 중... (${toolCount}번째)`;
           }
           else if (p.tool && p.status === 'done') {
-            // 도구 실행 완료
-            wf.steps[1].detail = `${p.tool} 완료 (${toolCount}개)`;
-            if (p.output) msg.content += `${p.output.substring(0, 200)}${p.output.length > 200 ? '...' : ''}\n`;
+            // 도구 실행 완료 — 채팅에 표시하지 않음
+            wf.steps[1].detail = `도구 ${toolCount}개 완료`;
           }
           else if (p.text) { msg.content += p.text; }
           else { msg.content += d; }
@@ -1653,9 +1644,9 @@ function fmtMd(t){
   // 인라인 코드
   h=h.replace(/`([^`]+)`/g,'<code style="background:var(--color-bg-input);padding:1px 4px;border-radius:3px;font-family:var(--font-mono);font-size:11px">$1</code>');
   // 헤딩
-  h=h.replace(/^### (.+)$/gm,'<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin:6px 0 1px">$1</div>');
-  h=h.replace(/^## (.+)$/gm,'<div style="font-size:14px;font-weight:700;color:var(--color-text-primary);margin:8px 0 1px">$1</div>');
-  h=h.replace(/^# (.+)$/gm,'<div style="font-size:15px;font-weight:700;color:var(--color-text-primary);margin:8px 0 2px">$1</div>');
+  h=h.replace(/^### (.+)$/gm,'<div style="font-size:13px;font-weight:700;color:var(--color-text-primary);margin:10px 0 3px">$1</div>');
+  h=h.replace(/^## (.+)$/gm,'<div style="font-size:14px;font-weight:700;color:var(--color-text-primary);margin:12px 0 4px">$1</div>');
+  h=h.replace(/^# (.+)$/gm,'<div style="font-size:15px;font-weight:700;color:var(--color-text-primary);margin:14px 0 4px">$1</div>');
   // 볼드/이탤릭
   h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');
